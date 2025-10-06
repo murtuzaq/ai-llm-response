@@ -1,12 +1,12 @@
 
 import json, time, hashlib, random
 from typing import Tuple
-from .provider_base import BaseProvider
+from ..provider_base import BaseProvider
 
 class MockProvider(BaseProvider):
     def generate(self, system, user, model, temperature, max_tokens) -> Tuple[str, int, int, int]:
         t0 = time.time()
-        seed = int(hashlib.sha256((system or "" + "|" + user).encode()).hexdigest(), 16) % (10**8)
+        seed = int(hashlib.sha256(((system or "") + "|" + user).encode()).hexdigest(), 16) % (10**8)
         rnd = random.Random(seed)
         title = "Quick " + str(abs(seed) % 1000) + " Snack"
         servings = 2 + rnd.randint(0, 4)

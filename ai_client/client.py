@@ -2,7 +2,8 @@
 import json
 from typing import Optional
 from .models import AIRequest, AIResponse
-from .provider_mock import MockProvider
+from .providers.provider_mock import MockProvider
+from .providers.provider_openai import OpenAIProvider
 from .validation import validate_recipe
 
 class AIClient:
@@ -23,6 +24,8 @@ class AIClient:
     def __select_provider(self, name: str):
         if name == "mock":
             return MockProvider()
+        if name == "openai":
+            return OpenAIProvider()
         raise ValueError("unknown provider")
 
     def __parse_json_or_none(self, text: str):
