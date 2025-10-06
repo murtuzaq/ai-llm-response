@@ -1,11 +1,10 @@
-
 import json, sys
 from .ai_request import AIRequest
 from .ai_response import AIResponse
 from .providers.provider_mock import MockProvider
 from .providers.provider_openai import OpenAIProvider
 from .validation import validate_recipe
-from .recipe_schema import schema_description
+from .json_repair import repair_json_structure
 
 def _debug_print(header: str, payload: str):
     try:
@@ -21,35 +20,54 @@ class AIClient:
         self.__provider = self.__select_provider(provider)
 
     def generate(self, req: AIRequest) -> AIResponse:
-        text, latency_ms, tokens_in, tokens_out = self.__provider.generate(req.system or "", req.user, req.model or self.__model, req.temperature, req.max_tokens)
+        # 1) Call provider
+        text, latency_ms, tokens_in, tokens_out = self.__provider.generate(
+            req.system or "",
+            req.user,
+            req.model or self.__model,
+            req.temperature,
+            req.max_tokens
+        )
         _debug_print("RAW AI RESPONSE", text)
         _debug_print("USAGE", f"latency_ms={latency_ms}, tokens_in={tokens_in}, tokens_out={tokens_out}")
+
+        # 2) Try direct parse + schema
         parsed = self.__parse_json_or_none(text)
         if parsed is not None:
             errs = validate_recipe(parsed)
             if not errs:
-                return AIResponse(text=text, parsed_json=parsed, model=req.model or self.__model, latency_ms=latency_ms, tokens_in=tokens_in, tokens_out=tokens_out)
+                return AIResponse(
+                    text=text,
+                    parsed_json=parsed,
+                    model=req.model or self.__model,
+                    latency_ms=latency_ms,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                )
 
-        # Repair loop
-        schema_text = json.dumps(schema_description(), ensure_ascii=False)
-        repair_prompt = (
-            "Your last output did not match the schema. "
-            "Fix it to VALID JSON ONLY. Follow this schema strictly: "
-            + schema_text
-            + "\nHere is your last output to repair:\n"
-            + (text if isinstance(text, str) else json.dumps(text, ensure_ascii=False))
-        )
-        _debug_print("REPAIR_PROMPT", repair_prompt[:1000] + ("..." if len(repair_prompt) > 1000 else ""))
-        text2, latency_ms2, tokens_in2, tokens_out2 = self.__provider.generate(req.system or "", repair_prompt, req.model or self.__model, req.temperature, req.max_tokens)
-        _debug_print("RAW AI RESPONSE (REPAIR)", text2)
-        _debug_print("USAGE (REPAIR)", f"latency_ms={latency_ms2}, tokens_in={tokens_in2}, tokens_out={tokens_out2}")
-        parsed2 = self.__parse_json_or_none(text2)
-        if parsed2 is not None:
-            errs2 = validate_recipe(parsed2)
-            if not errs2:
-                return AIResponse(text=text2, parsed_json=parsed2, model=req.model or self.__model, latency_ms=latency_ms+latency_ms2, tokens_in=tokens_in+tokens_in2, tokens_out=tokens_out+tokens_out2)
-            raise ValueError("schema_error_after_repair: " + ";".join(errs2))
-        raise ValueError("json_parse_error_after_repair")
+        # 3) Structural repair (no extra tokens / no retry)
+        repaired = repair_json_structure(text)
+        if repaired and repaired != text:
+            _debug_print("STRUCTURAL REPAIR (LOCAL)", repaired)
+            parsed_local = self.__parse_json_or_none(repaired)
+            if parsed_local is not None:
+                errs_local = validate_recipe(parsed_local)
+                if not errs_local:
+                    return AIResponse(
+                        text=repaired,
+                        parsed_json=parsed_local,
+                        model=req.model or self.__model,
+                        latency_ms=latency_ms,
+                        tokens_in=tokens_in,
+                        tokens_out=tokens_out,
+                    )
+
+        # 4) If we get here, still bad → raise specific error
+        if parsed is None:
+            raise ValueError("json_parse_error_after_structural_repair")
+        else:
+            # parsed existed but schema errors remained after repair attempt
+            raise ValueError("schema_error_after_structural_repair: " + ";".join(validate_recipe(parsed)))
 
     def __select_provider(self, name: str):
         if name == "mock":
