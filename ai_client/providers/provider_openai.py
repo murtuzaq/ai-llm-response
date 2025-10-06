@@ -1,7 +1,10 @@
 
-import os, time
+import os, time, json
 from typing import Tuple
 from ..provider_base import BaseProvider
+from ..recipe_schema import schema_description
+
+SYSTEM_GUARD = "You are a culinary assistant. Return ONLY valid JSON matching the requested schema. Do not include markdown or explanations."
 
 class OpenAIProvider(BaseProvider):
     def __init__(self):
@@ -13,15 +16,29 @@ class OpenAIProvider(BaseProvider):
 
     def generate(self, system, user, model, temperature, max_tokens) -> Tuple[str, int, int, int]:
         t0 = time.time()
-        r = self.__client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system or ""},
-                {"role": "user", "content": user},
-            ],
-            temperature=temperature,
-            max_tokens=max_tokens
-        )
+        schema_text = json.dumps(schema_description(), ensure_ascii=False)
+        sys_msg = (system or SYSTEM_GUARD) + "\nSchema:" + schema_text + "\nRules: output JSON ONLY."
+        try:
+            r = self.__client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": sys_msg},
+                    {"role": "user", "content": user},
+                ],
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format={"type":"json_object"}
+            )
+        except Exception:
+            r = self.__client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": sys_msg},
+                    {"role": "user", "content": user},
+                ],
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
         text = r.choices[0].message.content or ""
         usage = getattr(r, "usage", None)
         prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
