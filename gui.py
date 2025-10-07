@@ -5,6 +5,7 @@ from ai_client.client import AIClient
 from ai_client.ai_request import AIRequest
 from ai_client.recipe_schema import schema_description
 from ai_client.supported_models import get_supported_models
+from ai_client.storage import get_store
 
 class App:
     def __init__(self, root):
@@ -50,6 +51,13 @@ class App:
         row += 1
         self.__generate_btn = ttk.Button(frm, text="Generate JSON", command=self.__on_generate)
         self.__generate_btn.grid(row=row, column=3, sticky="e", pady=12)
+
+        # Storage buttons
+        row += 1
+        store_bar = ttk.Frame(frm)
+        store_bar.grid(row=row, column=0, columnspan=4, sticky="we")
+        ttk.Button(store_bar, text="Save to DB", command=self.__on_save).pack(side="left")
+        ttk.Button(store_bar, text="Browse DB", command=self.__on_browse).pack(side="left")
 
         row += 1
         ttk.Label(frm, text="Output (JSON):").grid(row=row, column=0, sticky="w")
@@ -104,6 +112,96 @@ class App:
         except Exception as e:
             self.__output.delete("1.0", "end")
             self.__output.insert("1.0", f"Error: {e}")
+
+    def __on_save(self):
+        try:
+            text = self.__output.get("1.0", "end").strip()
+            if not text:
+                messagebox.showwarning("Nothing to save", "Output is empty. Generate a recipe first.")
+                return
+            data = json.loads(text)
+        except Exception as e:
+            messagebox.showerror("Invalid JSON", f"Could not parse JSON from output box:\n{e}")
+            return
+        try:
+            store = get_store()
+            rid = store.save(data, user_id=None)
+            messagebox.showinfo("Saved", f"Recipe saved with ID: {rid}")
+        except Exception as e:
+            messagebox.showerror("DB Error", f"Failed to save recipe:\n{e}")
+
+    def __on_browse(self):
+        store = get_store()
+        try:
+            rows = store.list(limit=200)
+        except Exception as e:
+            messagebox.showerror("DB Error", f"Failed to list recipes:\n{e}")
+            return
+        win = tk.Toplevel(self.__root)
+        win.title("Recipes in Database")
+        win.geometry("700x400")
+        top = ttk.Frame(win, padding=8); top.pack(fill="x")
+        tk.Label(top, text="Search:").pack(side="left")
+        search_var = tk.StringVar()
+        search_entry = ttk.Entry(top, textvariable=search_var, width=30)
+        search_entry.pack(side="left", padx=6)
+        list_frame = ttk.Frame(win, padding=8); list_frame.pack(fill="both", expand=True)
+        cols = ("id", "title", "created_at")
+        tree = ttk.Treeview(list_frame, columns=cols, show="headings")
+        for c in cols:
+            tree.heading(c, text=c)
+            tree.column(c, width=200 if c != "title" else 350, anchor="w")
+        tree.pack(fill="both", expand=True)
+        def refresh(items):
+            for i in tree.get_children():
+                tree.delete(i)
+            for r in items:
+                tree.insert("", "end", values=(r.get("id"), r.get("title"), r.get("created_at")))
+        refresh(rows)
+
+        def do_search(*args):
+            q = search_var.get().strip()
+            try:
+                items = store.search(q, limit=200) if q else store.list(limit=200)
+                refresh(items)
+            except Exception as e:
+                messagebox.showerror("DB Error", f"Search failed:\n{e}")
+        search_var.trace_add("write", lambda *_: do_search())
+
+        btns = ttk.Frame(win, padding=8); btns.pack(fill="x")
+        def load_selected():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showwarning("Select", "Select a row first.")
+                return
+            rid = tree.item(sel[0])["values"][0]
+            row = store.get(rid)
+            if not row:
+                messagebox.showerror("Not found", "Recipe not found.")
+                return
+            try:
+                data = json.loads(row["json"])
+                self.__output.delete("1.0", "end")
+                self.__output.insert("1.0", json.dumps(data, indent=2))
+                win.destroy()
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not load recipe JSON:\n{e}")
+        ttk.Button(btns, text="Load", command=load_selected).pack(side="left")
+        def delete_selected():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showwarning("Select", "Select a row first.")
+                return
+            rid = tree.item(sel[0])["values"][0]
+            import tkinter.messagebox as mbox
+            if not mbox.askyesno("Confirm", "Delete this recipe?"):
+                return
+            ok = store.delete(rid)
+            if ok:
+                do_search()
+            else:
+                messagebox.showerror("Error", "Delete failed.")
+        ttk.Button(btns, text="Delete", command=delete_selected).pack(side="left")
 
 def main():
     root = tk.Tk()

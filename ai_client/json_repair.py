@@ -1,3 +1,4 @@
+
 import re
 
 def strip_code_fences(s: str) -> str:
@@ -55,7 +56,7 @@ def balance_brackets(s: str) -> str:
             if stack and stack[-1] == ch:
                 stack.pop()
             else:
-                out.pop()  # drop unmatched closer
+                out.pop()
     while stack:
         out.append(stack.pop())
     return "".join(out)
