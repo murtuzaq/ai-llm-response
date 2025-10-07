@@ -58,6 +58,7 @@ class App:
         store_bar.grid(row=row, column=0, columnspan=4, sticky="we")
         ttk.Button(store_bar, text="Save to DB", command=self.__on_save).pack(side="left")
         ttk.Button(store_bar, text="Browse DB", command=self.__on_browse).pack(side="left")
+        ttk.Button(store_bar, text="View Recipe", command=self.__on_view).pack(side="left")
 
         row += 1
         ttk.Label(frm, text="Output (JSON):").grid(row=row, column=0, sticky="w")
@@ -202,6 +203,116 @@ class App:
             else:
                 messagebox.showerror("Error", "Delete failed.")
         ttk.Button(btns, text="Delete", command=delete_selected).pack(side="left")
+
+
+    def __on_view(self):
+        # Parse JSON from output box and render a child window
+        try:
+            text = self.__output.get("1.0", "end").strip()
+            if not text:
+                from tkinter import messagebox
+                messagebox.showwarning("Nothing to view", "Output is empty. Generate or load a recipe first.")
+                return
+            data = json.loads(text)
+        except Exception as e:
+            from tkinter import messagebox
+            messagebox.showerror("Invalid JSON", f"Could not parse JSON from output box:\n{e}")
+            return
+        self.__open_view_window(data)
+
+    def __open_view_window(self, data: dict):
+        import tkinter as tk
+        from tkinter import ttk
+
+        win = tk.Toplevel(self.__root)
+        title = data.get("title") or "Recipe"
+        win.title(f"View: {title}")
+        win.geometry("800x600")
+
+        # Scrollable frame pattern (Canvas + Frame + Scrollbar)
+        container = ttk.Frame(win); container.pack(fill="both", expand=True)
+        canvas = tk.Canvas(container, highlightthickness=0)
+        vsb = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        content = ttk.Frame(canvas)
+        content_id = canvas.create_window((0,0), window=content, anchor="nw")
+
+        def on_configure(event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfigure(content_id, width=canvas.winfo_width())
+        content.bind("<Configure>", on_configure)
+        win.bind("<Configure>", on_configure)
+
+        # Helpers
+        def add_section(header: str):
+            lbl = ttk.Label(content, text=header, font=("Segoe UI", 12, "bold"))
+            lbl.pack(anchor="w", pady=(12, 4))
+
+        # Header + meta
+        add_section(title)
+        meta = ttk.Frame(content); meta.pack(fill="x")
+        ttk.Label(meta, text=f"Servings: {data.get('servings','')}", padding=(0,0,12,0)).pack(side="left")
+        ttk.Label(meta, text=f"Difficulty: {data.get('difficulty','')}").pack(side="left")
+
+        # Time
+        t = data.get("time") or {}
+        add_section("Time")
+        tf = ttk.Frame(content); tf.pack(fill="x")
+        ttk.Label(tf, text=f"Prep: {t.get('prep_min','?')} min", padding=(0,0,12,0)).pack(side="left")
+        ttk.Label(tf, text=f"Cook: {t.get('cook_min','?')} min", padding=(0,0,12,0)).pack(side="left")
+        ttk.Label(tf, text=f"Total: {t.get('total_min','?')} min").pack(side="left")
+
+        # Ingredients table
+        add_section("Ingredients")
+        ing_frame = ttk.Frame(content); ing_frame.pack(fill="x")
+        cols = ("Qty", "Unit", "Ingredient", "Notes")
+        tree = ttk.Treeview(ing_frame, columns=cols, show="headings", height=8)
+        for c, w in zip(cols, (80, 80, 320, 230)):
+            tree.heading(c, text=c)
+            tree.column(c, width=w, anchor="w")
+        tree.pack(fill="x", expand=False)
+        for ing in (data.get("ingredients") or []):
+            qty = ing.get("quantity", "")
+            unit = ing.get("unit", "")
+            name = ing.get("name", "")
+            notes = ing.get("notes", "")
+            tree.insert("", "end", values=(qty, unit, name, notes))
+
+        # Steps
+        add_section("Steps")
+        steps = data.get("steps") or []
+        for st in steps:
+            card = ttk.Frame(content, padding=8, relief="groove")
+            card.pack(fill="x", pady=6)
+            num = st.get("number", "")
+            instr = st.get("instruction", "")
+            dur = st.get("duration_min", None)
+            header = f"Step {num}"
+            if isinstance(dur, int):
+                header += f" — {dur} min"
+            ttk.Label(card, text=header, font=("Segoe UI", 10, "bold")).pack(anchor="w")
+            ttk.Label(card, text=instr, wraplength=740, justify="left").pack(anchor="w", pady=(2, 6))
+
+            equip = st.get("equipment", [])
+            if isinstance(equip, list) and equip:
+                ef = ttk.Frame(card); ef.pack(fill="x", pady=(2,2))
+                ttk.Label(ef, text="Equipment:", font=("Segoe UI", 9, "italic")).pack(side="left")
+                eq_texts = []
+                for e in equip:
+                    nm = e.get("name", "")
+                    use = e.get("usage")
+                    eq_texts.append(f"{nm}{' ('+use+')' if use else ''}")
+                ttk.Label(card, text=", ".join(eq_texts)).pack(anchor="w")
+
+            if st.get("notes"):
+                ttk.Label(card, text=f"Notes: {st.get('notes')}", foreground="#555").pack(anchor="w", pady=(2,0))
+
+        # Make sure scrolling bounds are correct initially
+        content.update_idletasks()
+        on_configure()
+
 
 def main():
     root = tk.Tk()
